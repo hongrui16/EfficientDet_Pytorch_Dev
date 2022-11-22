@@ -1,12 +1,50 @@
 import os
 import torch
 import numpy as np
+from skimage.measure import label, regionprops, find_contours
 
 from torch.utils.data import Dataset, DataLoader
 from pycocotools.coco import COCO
 import cv2
 from colorsys import rgb_to_hsv, hsv_to_rgb
 from skimage.color import rgb2hsv, hsv2rgb
+
+
+""" Convert a mask to border image """
+def mask_to_border(mask):
+    h, w = mask.shape
+    border = np.zeros((h, w))
+
+    contours = find_contours(mask, 128)
+    for contour in contours:
+        for c in contour:
+            x = int(c[0])
+            y = int(c[1])
+            border[x][y] = 255
+
+    return border
+
+""" Mask to bounding boxes """
+def mask_to_bbox(mask):
+    bboxes = []
+    mask = mask_to_border(mask)
+    lbl = label(mask)
+    props = regionprops(lbl)
+    for prop in props:
+        x1 = prop.bbox[1]
+        y1 = prop.bbox[0]
+
+        x2 = prop.bbox[3]
+        y2 = prop.bbox[2]
+
+        bboxes.append([x1, y1, x2, y2])
+
+    return bboxes
+
+def parse_mask(mask):
+    mask = np.expand_dims(mask, axis=-1)
+    mask = np.concatenate([mask, mask, mask], axis=-1)
+    return mask
 
 class CocoDataset(Dataset):
     def __init__(self, root_dir, set='train2017', transform=None):
@@ -23,7 +61,9 @@ class CocoDataset(Dataset):
     def load_classes(self):
 
         # load class names (name -> label)
-        categories = self.coco.loadCats(self.coco.getCatIds())
+        self.cat_ids = self.coco.getCatIds()
+        # print('self.cat_ids', self.cat_ids)
+        categories = self.coco.loadCats(self.cat_ids)
         categories.sort(key=lambda x: x['id'])
 
         self.classes = {}
@@ -85,23 +125,30 @@ class CocoDataset(Dataset):
 
 
 class FakeCocoDataset(Dataset):
-    def __init__(self, root_dir, set='train2017', transform=None, args = None):
-
+    def __init__(self, root_dir = None, set='train2017', transform=None, args = None, **kwargs):
+        self.args = args
         self.root_dir = root_dir
         self.set_name = set
         self.transform = transform
 
-        self.coco = COCO(os.path.join(self.root_dir, 'annotations', 'instances_' + self.set_name + '.json'))
-        self.image_ids = self.coco.getImgIds()
-
-        self.load_classes()
+        self.img_dir = kwargs.get('img_dir', None)
+        self.annFilePath = kwargs.get('annFile', None)
+        split = kwargs.get('split', 'train')
+        
         self.cancer_label_id = 5
-        self.args = args
+        self.use_paste_aug = args.use_paste_aug if split == 'train' else False
+        self.coco = COCO(self.annFilePath)
+        self.image_ids = self.coco.getImgIds()
+        print(f'{split} example number is {len(self.image_ids)}')
+        # self.load_classes()
 
     def load_classes(self):
-
         # load class names (name -> label)
-        categories = self.coco.loadCats(self.coco.getCatIds())
+        # categories = self.coco.loadCats(self.coco.getCatIds())
+        cat_ids = self.coco.getCatIds()
+        # print('self.cat_ids', cat_ids)
+        # return
+        categories = self.coco.loadCats(cat_ids)
         categories.sort(key=lambda x: x['id'])
 
         self.classes = {}
@@ -112,6 +159,16 @@ class FakeCocoDataset(Dataset):
         self.labels = {}
         for key, value in self.classes.items():
             self.labels[value] = key
+        print('self.labels', self.labels)
+        # print('...............')
+        # print('...............')
+        # print('...............')
+        # print('...............')
+        
+        # print('...............')
+        # print('...............')
+        # print('...............')
+
 
     def __len__(self):
         return len(self.image_ids)
@@ -121,12 +178,14 @@ class FakeCocoDataset(Dataset):
     def __getitem__(self, idx):
         image_index = idx
         image_info = self.coco.loadImgs(self.image_ids[image_index])[0]
-        path = os.path.join(self.root_dir, self.set_name, image_info['file_name'])
+        # path = os.path.join(self.root_dir, self.set_name, image_info['file_name'])
+        path = os.path.join(self.img_dir, image_info['file_name'])
         if not os.path.exists(path):
             while True:
                 image_index = np.random.randint(0, len(self.image_ids))
                 image_info = self.coco.loadImgs(self.image_ids[image_index])[0]
-                path = os.path.join(self.root_dir, self.set_name, image_info['file_name'])
+                # path = os.path.join(self.root_dir, self.set_name, image_info['file_name'])
+                path = os.path.join(self.img_dir, image_info['file_name'])
                 if os.path.exists(path):
                     break
         img = cv2.imread(path)
@@ -154,25 +213,28 @@ class FakeCocoDataset(Dataset):
             
                 # annotation[0, :4] = a['bbox']
             cls_id = a['category_id'] 
-            mask += self.coco.annToMask(a) * cls_id
-            if self.args.call_cancer_only:
-                if a['category_id'] == self.cancer_label_id:
-                    annotation[0, 4] = 1
-                    annotation[0, :4] = a['bbox']
-                    annotations = np.append(annotations, annotation, axis=0)
-            else:
-                annotation[0, 4] = cls_id
-                annotation[0, :4] = a['bbox']
-                annotations = np.append(annotations, annotation, axis=0)
-
-        if len(mask[mask==self.cancer_label_id]) > 0 and self.args.use_paste_aug and np.random.rand() < 0.5:
-            annotation = np.zeros((1, 5))
-            img, _, bbox = paste_instance_on_the_same_image_syncs(img.copy(), mask.copy(), img.copy(), mask.copy(), self.cancer_label_id)
-            annotation[0, :4] = np.array(bbox)
-            annotation[0, 4] = self.cancer_label_id
+            try:
+                mask += self.coco.annToMask(a) * cls_id
+            except:
+                # print('error')
+                continue
+            if self.args.call_cancer_only and a['category_id'] != self.cancer_label_id:
+                continue
+            annotation[0, 4] = cls_id 
+            annotation[0, :4] = a['bbox']
             annotations = np.append(annotations, annotation, axis=0)
+
+        # if len(mask[mask==self.cancer_label_id]) > 0 and self.args.use_paste_aug and np.random.rand() < 0.5:
+        if len(mask[mask==self.cancer_label_id]) > 0 and self.args.use_paste_aug:
+            if len(mask.shape) == 2 and len(img.shape) == 3:
+                annotation = np.zeros((1, 5))
+                img, _, bbox = paste_instance_on_the_same_image_syncs(img.copy(), mask.copy(), img.copy(), mask.copy(), self.cancer_label_id)
+                annotation[0, :4] = np.array(bbox)
+                annotation[0, 4] = self.cancer_label_id
+                annotations = np.append(annotations, annotation, axis=0)
         if self.args.call_cancer_only:
-            annotations[:, 4][annotations[:, 4] == self.cancer_label_id] = 1
+            annotations[:, 4][annotations[:, 4] != self.cancer_label_id] = 0 
+            annotations[:, 4][annotations[:, 4] == self.cancer_label_id] = 0 
         # transform from [x, y, w, h] to [x1, y1, x2, y2]
         annotations[:, 2] = annotations[:, 0] + annotations[:, 2]
         annotations[:, 3] = annotations[:, 1] + annotations[:, 3]
@@ -233,12 +295,12 @@ def mask_to_bbox_corners(mask, mode='XYXY'):
     (xmin, ymin, xmax, ymax) in absolute floating points coordinates.
     The coordinates in range [0, width or height].
     '''
+    # print('     mask_to_bbox_corners.......mask', mask.shape)
     col_0 = np.nonzero(mask.any(axis=0))[0][0]
     col_1 = np.nonzero(mask.any(axis=0))[0][-1]
     row_0 = np.nonzero(mask.any(axis=1))[0][0]
     row_1 = np.nonzero(mask.any(axis=1))[0][-1]
-    if mode == 'numpy':
-        return row_0, row_1,col_0,  col_1
+    
     if mode == 'XYXY':
         xmin = int(col_0)
         xmax = int(col_1)
@@ -250,14 +312,23 @@ def mask_to_bbox_corners(mask, mode='XYXY'):
 def paste_instance_on_the_same_image_syncs(fg_img, fg_label, bg_img, bg_label, target_id):
     # fg_mask_filepath = fg_img_filepath.replace('.jpg', '.png')
     # bg_masl_filepath = bg_img_filepath.replace('.jpg', '.png')
+    # print('fg_img ', fg_img.shape)
+    # print('fg_label ', fg_label.shape)
     safe_margin = 3
     bg_h, bg_w, _ = bg_img.shape
     fg_mask = fg_label
     fg_mask = fg_mask==target_id
     fg_mask = fg_mask.astype(np.uint8)
     fg_bbox = mask_to_bbox_corners(fg_mask)
-    # print('bbox', bbox)
     xmin, ymin, xmax, ymax = fg_bbox
+    # print('fg_bbox', fg_bbox)
+
+    # print('fg_mask', fg_mask.nonzero())
+    # print('fg_mask', np.unique(fg_mask))
+    # fg_bboxes = mask_to_bbox(fg_mask)
+    # cv2.imwrite('tep.jpg', 255*fg_mask)
+    # print('fg_bboxes', fg_bboxes)
+    # xmin, ymin, xmax, ymax = fg_bboxes[0]
     fg_box_h = ymax - ymin
     fg_box_w = xmax - xmin
     
@@ -322,10 +393,12 @@ def paste_instance_on_the_same_image_syncs(fg_img, fg_label, bg_img, bg_label, t
     # offset_h = bg_h - fg_block_h
     # offset_w = bg_w - fg_block_w
     # print(f'fg_block_h {fg_block_h}; bg_h {bg_h}; offset_h {offset_h}')
-    target_mask = bg_label==target_id
+    target_mask = bg_label>0
     target_mask = target_mask.astype(np.uint8)
     bg_bbox = mask_to_bbox_corners(target_mask)
     bg_xmin, bg_ymin, bg_xmax, bg_ymax = bg_bbox
+    # bg_bboxes = mask_to_bbox(target_mask)
+    # bg_xmin, bg_ymin, bg_xmax, bg_ymax = bg_bboxes[0]
     ext_bg_xmin = bg_xmin - new_fg_box_w //2 if bg_xmin - new_fg_box_w //2 > 0 else 0
     ext_bg_ymin = bg_ymin - new_fg_box_h //2 if bg_ymin - new_fg_box_h //2 > 0 else 0
     ext_bg_xmax = bg_xmax + new_fg_box_w //2 if bg_xmax + new_fg_box_w //2 < bg_w else bg_w
@@ -397,9 +470,11 @@ def paste_instance_on_the_same_image_syncs(fg_img, fg_label, bg_img, bg_label, t
 
     compose_img = compose_img.astype(np.uint8) #合成的图像
 
-    temp_new_fg_mask = temp_new_fg_mask==target_id
+    temp_new_fg_mask = temp_new_fg_mask>0
     out_box = mask_to_bbox_corners(temp_new_fg_mask.astype(np.uint8))
     b_xmin, b_ymin, b_xmax, b_ymax = out_box
+    # out_boxes = mask_to_bbox(temp_new_fg_mask.astype(np.uint8))
+    # b_xmin, b_ymin, b_xmax, b_ymax = out_boxes[0]
     # bg_b_ycbcr = rgb2ycbcr(bg_img[b_ymin:b_ymax, b_xmin:b_xmax][::-1])
     # comp_b_ycbcr = rgb2ycbcr(compose_img[b_ymin:b_ymax, b_xmin:b_xmax][::-1])
     # comp_b_ycbcr[:,:,0] = bg_b_ycbcr[:,:,0]

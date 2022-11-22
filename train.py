@@ -6,6 +6,8 @@ import argparse
 import datetime
 import os
 import traceback
+from time import gmtime, strftime
+import pytz
 
 import numpy as np
 import torch
@@ -36,7 +38,7 @@ def get_args():
     parser.add_argument('-p', '--project', type=str, default='coco', help='project file that contains parameters')
     parser.add_argument('-c', '--compound_coef', type=int, default=0, help='coefficients of efficientdet')
     parser.add_argument('-n', '--num_workers', type=int, default=12, help='num_workers of dataloader')
-    parser.add_argument('--batch_size', type=int, default=12, help='The number of images per batch among all devices')
+    parser.add_argument('--batch_size', type=int, default=8, help='The number of images per batch among all devices')
     parser.add_argument('--head_only', type=boolean_string, default=False,
                         help='whether finetunes only the regressor and the classifier, '
                              'useful in early stage convergence or small/easy dataset')
@@ -44,7 +46,7 @@ def get_args():
     parser.add_argument('--optim', type=str, default='adamw', help='select optimizer for training, '
                                                                    'suggest using \'admaw\' until the'
                                                                    ' very final stage then switch to \'sgd\'')
-    parser.add_argument('--num_epochs', type=int, default=500)
+    parser.add_argument('--num_epochs', type=int, default=75)
     parser.add_argument('--val_interval', type=int, default=1, help='Number of epoches between valing phases')
     parser.add_argument('--save_interval', type=int, default=500, help='Number of steps between saving')
     parser.add_argument('--es_min_delta', type=float, default=0.0,
@@ -52,10 +54,8 @@ def get_args():
     parser.add_argument('--es_patience', type=int, default=0,
                         help='Early stopping\'s parameter: number of epochs with no improvement after which training will be stopped. Set to 0 to disable this technique.')
     parser.add_argument('--data_path', type=str, default='datasets/', help='the root folder of dataset')
-    parser.add_argument('--log_path', type=str, default='logs/')
-    parser.add_argument('-w', '--load_weights', type=str, default=None,
-                        help='whether to load weights from a checkpoint, set None to initialize, set \'last\' to load last checkpoint')
-    parser.add_argument('--saved_path', type=str, default='logs/')
+    parser.add_argument('--log_path', type=str, default='logs')
+    parser.add_argument('--resume_path', type=str, default=None)
     parser.add_argument('--debug', type=boolean_string, default=False,
                         help='whether visualize the predicted boxes of training, '
                              'the output images will be in test/')
@@ -63,7 +63,13 @@ def get_args():
                         help='only train and test cancer')
     parser.add_argument('--use_paste_aug', type=boolean_string, default=True,
                         help='use copy and paste instance augmentation')
-
+    parser.add_argument('--train_annFile', type=str, default=None)
+    parser.add_argument('--train_image_dir', type=str, default=None)
+    parser.add_argument('--val_annFile', type=str, default=None)
+    parser.add_argument('--val_image_dir', type=str, default=None)
+    parser.add_argument('--gpu_id', type=str, default=None)
+    parser.add_argument('-ft', '--finetune', type=boolean_string, default=False,
+                        help='fine-tune')
     args = parser.parse_args()
     return args
 
@@ -77,6 +83,9 @@ class ModelWithLoss(nn.Module):
 
     def forward(self, imgs, annotations, obj_list=None):
         _, regression, classification, anchors = self.model(imgs)
+        # print('regression', regression.size())
+        # print('classification', classification.size())
+        # print('anchors', anchors.size())
         if self.debug:
             cls_loss, reg_loss = self.criterion(classification, regression, anchors, annotations,
                                                 imgs=imgs, obj_list=obj_list)
@@ -85,21 +94,62 @@ class ModelWithLoss(nn.Module):
         return cls_loss, reg_loss
 
 
+def get_current_time():
+    tz = pytz.timezone('US/Eastern')
+    current_time = datetime.datetime.now(tz).strftime("%Y-%m-%d_%H-%M-%S")
+    return str(current_time)
+
 def train(opt):
     params = Params(f'projects/{opt.project}.yml')
 
+    
+
     if params.num_gpus == 0:
         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+    if not opt.gpu_id is None:
+        os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpu_id
+        params.num_gpus = len(opt.gpu_id.split(','))
+    print(f'using {params.num_gpus}, ID is {opt.gpu_id}')
 
     if torch.cuda.is_available():
         torch.cuda.manual_seed(42)
+        cuda = True
     else:
+        cuda = False
         torch.manual_seed(42)
 
-    opt.saved_path = opt.saved_path + f'/{params.project_name}/'
-    opt.log_path = opt.log_path + f'/{params.project_name}/tensorboard/'
+    current_time = get_current_time()
+    opt.log_path = opt.log_path + f'/{params.project_name}/{current_time}'
+    tensorboard_dir = opt.log_path + f'/tensorboard'
+    weight_save_dir = opt.log_path + f'/weight'
     os.makedirs(opt.log_path, exist_ok=True)
-    os.makedirs(opt.saved_path, exist_ok=True)
+    os.makedirs(tensorboard_dir, exist_ok=True)
+    os.makedirs(weight_save_dir, exist_ok=True)
+    print('current_time' + ':' + current_time + '\n')
+
+    logfile = os.path.join(opt.log_path, 'parameters.txt')
+
+    p=vars(opt)
+    log_file = open(logfile, "a+")
+    log_file.write('current_time' + ':' + current_time + '\n')
+    log_file.write('\n')
+    for key, val in p.items():
+        log_file.write(key + ':' + str(val) + '\n')
+    log_file.write('\n')
+    log_file.write('\n')
+    # current_time = strftime("%Y-%m-%d-%H-%M-%S", gmtime())
+
+    p=vars(params)
+    for key, val in p.items():
+        log_file.write(key + ':' + str(val) + '\n')
+    log_file.write('\n')
+
+    log_file.close()# 
+
+    opt.train_annFile = params.train_annFile
+    opt.train_image_dir = params.train_image_dir
+    opt.val_annFile = params.val_annFile
+    opt.val_image_dir = params.val_image_dir
 
     training_params = {'batch_size': opt.batch_size,
                        'shuffle': True,
@@ -114,6 +164,7 @@ def train(opt):
                   'num_workers': opt.num_workers}
 
     input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
+
     # training_set = CocoDataset(root_dir=os.path.join(opt.data_path, params.project_name), set=params.train_set,
     #                            transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
     #                                                          Augmenter(),
@@ -123,46 +174,74 @@ def train(opt):
     #                       transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
     #                                                     Resizer(input_sizes[opt.compound_coef])]))
 
-    training_set = FakeCocoDataset(root_dir=os.path.join(opt.data_path, params.project_name), set=params.train_set,
-                               transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
+    training_set = FakeCocoDataset(transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
                                                              Augmenter(),
-                                                             Resizer(input_sizes[opt.compound_coef])]), args=opt)
-
-    val_set = FakeCocoDataset(root_dir=os.path.join(opt.data_path, params.project_name), set=params.val_set,
-                          transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
-                                                        Resizer(input_sizes[opt.compound_coef])]), args=opt)
-
+                                                             Resizer(input_sizes[opt.compound_coef])]),
+                                                             args=opt, img_dir=opt.train_image_dir, annFile= opt.train_annFile, split = 'train')
     training_generator = DataLoader(training_set, **training_params)
-
     
-    val_generator = DataLoader(val_set, **val_params)
+    if os.path.exists(opt.val_annFile) and os.path.exists(opt.val_image_dir):
+        val_set = FakeCocoDataset(transform=transforms.Compose([Normalizer(mean=params.mean, std=params.std),
+                                                            Resizer(input_sizes[opt.compound_coef])]), 
+                                                            args=opt,  img_dir=opt.val_image_dir, annFile= opt.val_annFile, split = 'val')
+
+        val_generator = DataLoader(val_set, **val_params)
+    else:
+        val_set = None
+        val_generator = None
+    # pre_weight_filepath = os.path.join(f'weights/efficientdet-d{opt.compound_coef}.pth')
+    # if not os.path.exists(pre_weight_filepath):
+    #     load_weights = True
+    #     print('[Info] load pretrained weights...')
+    # else:
+    #     load_weights = False
 
     model = EfficientDetBackbone(num_classes=len(params.obj_list), compound_coef=opt.compound_coef,
-                                 ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales))
+                                 ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales), load_weights=False)
 
-    # load last weights
-    if opt.load_weights is not None:
-        if opt.load_weights.endswith('.pth'):
-            weights_path = opt.load_weights
-        else:
-            weights_path = get_last_weights(opt.saved_path)
-        try:
-            last_step = int(os.path.basename(weights_path).split('_')[-1].split('.')[0])
-        except:
-            last_step = 0
-
-        try:
-            ret = model.load_state_dict(torch.load(weights_path), strict=False)
-        except RuntimeError as e:
-            print(f'[Warning] Ignoring {e}')
-            print(
-                '[Warning] Don\'t panic if you see this, this might be because you load a pretrained weights with different number of classes. The rest of the weights should be loaded already.')
-
-        print(f'[Info] loaded weights: {os.path.basename(weights_path)}, resuming checkpoint from step: {last_step}')
+    if opt.optim == 'adamw':
+        optimizer = torch.optim.AdamW(model.parameters(), opt.lr)
     else:
-        last_step = 0
+        optimizer = torch.optim.SGD(model.parameters(), opt.lr, momentum=0.9, nesterov=True)
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
+
+    writer = SummaryWriter(tensorboard_dir)
+
+    # warp the model with loss function, to reduce the memory usage on gpu0 and speedup
+    model = ModelWithLoss(model, debug=opt.debug)
+
+    # if cuda:
+    #     model.cuda()
+    # load last weights
+    if opt.resume_path is not None and os.path.exists(opt.resume_path):
+        checkpoint = torch.load(opt.resume_path, map_location=torch.device('cpu'))
+        last_epoch = checkpoint['epoch']
+
+        model.load_state_dict(checkpoint['state_dict'])
+
+        print("=> loaded checkpoint '{}' (epoch {})"
+                .format(opt.resume_path, checkpoint['epoch']))
+
+        # Clear start epoch if fine-tuning
+        if opt.finetune:
+            last_epoch = -1
+            best_pred = 0.0
+            best_loss = float('inf')
+            print('fine-tune.................')
+        else:
+            last_epoch = float(checkpoint['epoch'])
+            best_pred = float(checkpoint['best_pre'])
+            best_loss = float(checkpoint['best_loss'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+    else:
+        last_epoch = -1
+        best_pred = 0.0
+        best_loss = float('inf')
         print('[Info] initializing weights...')
+        
         init_weights(model)
+    
 
     # freeze backbone if train head_only
     if opt.head_only:
@@ -189,11 +268,6 @@ def train(opt):
     else:
         use_sync_bn = False
 
-    writer = SummaryWriter(opt.log_path + f'/{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}/')
-
-    # warp the model with loss function, to reduce the memory usage on gpu0 and speedup
-    model = ModelWithLoss(model, debug=opt.debug)
-
     if params.num_gpus > 0:
         model = model.cuda()
         if params.num_gpus > 1:
@@ -201,33 +275,28 @@ def train(opt):
             if use_sync_bn:
                 patch_replication_callback(model)
 
-    if opt.optim == 'adamw':
-        optimizer = torch.optim.AdamW(model.parameters(), opt.lr)
-    else:
-        optimizer = torch.optim.SGD(model.parameters(), opt.lr, momentum=0.9, nesterov=True)
-
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, verbose=True)
-
-    epoch = 0
-    best_loss = 1e5
-    best_epoch = 0
-    step = max(0, last_step)
+    
     model.train()
-
-    num_iter_per_epoch = len(training_generator)
-
+    num_iter_per_epoch_tr = len(training_generator)
+    num_iter_per_epoch_val = len(val_generator)
+    print(f'training num_iter_per_epoch: {num_iter_per_epoch_tr}')
     try:
         for epoch in range(opt.num_epochs):
-            last_epoch = step // num_iter_per_epoch
-            if epoch < last_epoch:
+            # last_epoch = step // num_iter_per_epoch
+            if epoch <= last_epoch:
                 continue
 
             epoch_loss = []
+            epoch_loss_regression= []
+            epoch_loss_classification = []
             progress_bar = tqdm(training_generator)
             for iter, data in enumerate(progress_bar):
-                if iter < step - last_epoch * num_iter_per_epoch:
-                    progress_bar.update()
-                    continue
+                # if iter < step - last_epoch * num_iter_per_epoch_tr:
+                #     progress_bar.update()
+                #     continue
+                if opt.debug and iter > 3:
+                    break
+                step = iter + num_iter_per_epoch_tr * epoch
                 try:
                     imgs = data['img']
                     annot = data['annot']
@@ -240,10 +309,11 @@ def train(opt):
 
                     optimizer.zero_grad()
                     cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
+                    
                     cls_loss = cls_loss.mean()
                     reg_loss = reg_loss.mean()
-
                     loss = cls_loss + reg_loss
+                    # loss = loss.mean()
                     if loss == 0 or not torch.isfinite(loss):
                         continue
 
@@ -252,90 +322,134 @@ def train(opt):
                     optimizer.step()
 
                     epoch_loss.append(float(loss))
-
+                    # print('Train/Loss.....................', loss, step)
                     progress_bar.set_description(
-                        'Step: {}. Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Total loss: {:.5f}'.format(
-                            step, epoch, opt.num_epochs, iter + 1, num_iter_per_epoch, cls_loss.item(),
+                        'Train Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Total loss: {:.5f}'.format(
+                            epoch, opt.num_epochs, iter + 1, num_iter_per_epoch_tr, cls_loss.item(),
                             reg_loss.item(), loss.item()))
-                    writer.add_scalars('Loss', {'train': loss}, step)
-                    writer.add_scalars('Regression_loss', {'train': reg_loss}, step)
-                    writer.add_scalars('Classfication_loss', {'train': cls_loss}, step)
+                    writer.add_scalar('Train/Loss', loss.item(), step)
+                    
+                    writer.add_scalar('Train/Loss_reg', reg_loss.item(), step)
+                    writer.add_scalar('Train/Loss_cls', cls_loss.item(), step)
+
 
                     # log learning_rate
                     current_lr = optimizer.param_groups[0]['lr']
                     writer.add_scalar('learning_rate', current_lr, step)
 
-                    step += 1
+                    epoch_loss_classification.append(cls_loss.item())
+                    epoch_loss_regression.append(reg_loss.item())
 
-                    if step % opt.save_interval == 0 and step > 0:
-                        save_checkpoint(model, f'efficientdet-d{opt.compound_coef}_{epoch}_{step}.pth')
-                        print('checkpoint...')
-
+                    # if step % opt.save_interval == 0 and step > 0:
+                    #     save_checkpoint(model, f'efficientdet-d{opt.compound_coef}_{epoch}_{step}.pth', weight_save_dir)
+                    #     print('checkpoint...')
+                
                 except Exception as e:
                     print('[Error]', traceback.format_exc())
                     print(e)
                     continue
+            ep_cls_loss = np.mean(epoch_loss_classification)
+            ep_reg_loss = np.mean(epoch_loss_regression)
+            ep_loss = cls_loss + reg_loss
+            writer.add_scalar('Train/Epoch_loss', ep_loss, epoch)
+            writer.add_scalar('Train/Epoch_loss_reg', ep_reg_loss, epoch)
+            writer.add_scalar('Train/Epoch_loss_cls', ep_cls_loss, epoch)
+
             scheduler.step(np.mean(epoch_loss))
 
-            if epoch % opt.val_interval == 0:
-                model.eval()
-                loss_regression_ls = []
-                loss_classification_ls = []
-                for iter, data in enumerate(val_generator):
-                    with torch.no_grad():
-                        imgs = data['img']
-                        annot = data['annot']
+            save_checkpoints({
+                'epoch': epoch,
+                'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'best_pred': best_pred,
+                'best_loss': best_loss,
+                }, filename = f'efficientdet-d{opt.compound_coef}.pth.tar', saved_path= weight_save_dir)
 
-                        if params.num_gpus == 1:
-                            imgs = imgs.cuda()
-                            annot = annot.cuda()
+            
+            if not val_set is None:
+                step = iter + num_iter_per_epoch_val * epoch
+                if epoch % opt.val_interval == 0:
+                    model.eval()
+                    loss_regression_ls = []
+                    loss_classification_ls = []
+                    val_progress_bar = tqdm(val_generator)
 
-                        cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
-                        cls_loss = cls_loss.mean()
-                        reg_loss = reg_loss.mean()
+                    for iter, data in enumerate(val_progress_bar):
+                        if opt.debug and iter > 3:
+                            break
+                        with torch.no_grad():
+                            imgs = data['img']
+                            annot = data['annot']
 
-                        loss = cls_loss + reg_loss
-                        if loss == 0 or not torch.isfinite(loss):
-                            continue
+                            if params.num_gpus == 1:
+                                imgs = imgs.cuda()
+                                annot = annot.cuda()
 
-                        loss_classification_ls.append(cls_loss.item())
-                        loss_regression_ls.append(reg_loss.item())
+                            cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
+                            loss = cls_loss + reg_loss
+                            cls_loss = cls_loss.mean()
+                            reg_loss = reg_loss.mean()
 
-                cls_loss = np.mean(loss_classification_ls)
-                reg_loss = np.mean(loss_regression_ls)
-                loss = cls_loss + reg_loss
+                            
+                            if loss == 0 or not torch.isfinite(loss):
+                                continue
+                            
+                            progress_bar.set_description(
+                                'Val Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Total loss: {:.5f}'.format(
+                                    epoch, opt.num_epochs, iter + 1, num_iter_per_epoch_tr, cls_loss.item(),
+                                    reg_loss.item(), loss.item()))
+                            writer.add_scalar('Val/Loss', loss.item(), step)
+                            writer.add_scalar('Val/Loss_reg', reg_loss.item(), step)
+                            writer.add_scalar('Val/Loss_cls', cls_loss.item(), step)
+                            
+                            loss_classification_ls.append(cls_loss.item())
+                            loss_regression_ls.append(reg_loss.item())
 
-                print(
-                    'Val. Epoch: {}/{}. Classification loss: {:1.5f}. Regression loss: {:1.5f}. Total loss: {:1.5f}'.format(
-                        epoch, opt.num_epochs, cls_loss, reg_loss, loss))
-                writer.add_scalars('Loss', {'val': loss}, step)
-                writer.add_scalars('Regression_loss', {'val': reg_loss}, step)
-                writer.add_scalars('Classfication_loss', {'val': cls_loss}, step)
+                    ep_cls_loss = np.mean(loss_classification_ls)
+                    ep_reg_loss = np.mean(loss_regression_ls)
+                    ep_loss = cls_loss + reg_loss
 
-                if loss + opt.es_min_delta < best_loss:
-                    best_loss = loss
-                    best_epoch = epoch
+                    writer.add_scalar('Val/Epoch_loss', ep_loss, epoch)
+                    writer.add_scalar('Val/Epoch_loss_reg', ep_reg_loss, epoch)
+                    writer.add_scalar('Val/Epoch_loss_cls', ep_cls_loss, epoch)
+                    
+                    if ep_loss + opt.es_min_delta < best_loss:
+                        best_loss = ep_loss
+                        best_epoch = epoch
 
-                    save_checkpoint(model, f'efficientdet-d{opt.compound_coef}_{epoch}_{step}.pth')
+                        # save_checkpoint(model, f'efficientdet-d{opt.compound_coef}_{epoch}_{step}.pth', weight_save_dir)
+                        save_checkpoints({
+                        'epoch': epoch,
+                        'state_dict': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'best_pred': best_pred,
+                        'best_loss': best_loss,
+                        }, filename = f'efficientdet-d{opt.compound_coef}_best.pth.tar', saved_path= weight_save_dir)
 
-                model.train()
+                    model.train()
 
-                # Early stopping
-                if epoch - best_epoch > opt.es_patience > 0:
-                    print('[Info] Stop training at epoch {}. The lowest loss achieved is {}'.format(epoch, best_loss))
-                    break
+                    # Early stopping
+                    if epoch - best_epoch > opt.es_patience > 0:
+                        print('[Info] Stop training at epoch {}. The lowest loss achieved is {}'.format(epoch, best_loss))
+                        break
     except KeyboardInterrupt:
-        save_checkpoint(model, f'efficientdet-d{opt.compound_coef}_{epoch}_{step}.pth')
+        save_checkpoint(model, f'efficientdet-d{opt.compound_coef}_{epoch}_{step}.pth', weight_save_dir)
         writer.close()
     writer.close()
 
 
-def save_checkpoint(model, name):
+def save_checkpoint(model, name, saved_path):
     if isinstance(model, CustomDataParallel):
-        torch.save(model.module.model.state_dict(), os.path.join(opt.saved_path, name))
+        torch.save(model.module.model.state_dict(), os.path.join(saved_path, name))
     else:
-        torch.save(model.model.state_dict(), os.path.join(opt.saved_path, name))
+        torch.save(model.model.state_dict(), os.path.join(saved_path, name))
 
+def save_checkpoints(state, filename='checkpoint.pth.tar', saved_path = None):
+    filename = os.path.join(saved_path, filename)
+    torch.save(state, filename)
+    # if is_best:   
+    #     best_model_filepath = os.path.join(saved_path, 'model_best.pth.tar')
+    #     torch.save(state, best_model_filepath)
 
 if __name__ == '__main__':
     opt = get_args()

@@ -3,8 +3,10 @@
 import torch
 from torch import nn
 
-from efficientdet.model import BiFPN, Regressor, Classifier, EfficientNet
+from efficientdet.model import BiFPN, Regressor, Classifier
+from efficientdet.model import EfficientNet as EffNet
 from efficientdet.utils import Anchors
+from efficientnet_pytorch import EfficientNet
 
 
 class EfficientDetBackbone(nn.Module):
@@ -57,7 +59,13 @@ class EfficientDetBackbone(nn.Module):
                                pyramid_levels=(torch.arange(self.pyramid_levels[self.compound_coef]) + 3).tolist(),
                                **kwargs)
 
-        self.backbone_net = EfficientNet(self.backbone_compound_coef[compound_coef], load_weights)
+        # self.backbone_net = EffNet(self.backbone_compound_coef[compound_coef], load_weights)
+
+        # if load_weights:
+        #     self.backbone_net = EfficientNet.from_pretrained(f'efficientnet-b{compound_coef}')
+        # else:
+        #     self.backbone_net = EffNet(self.backbone_compound_coef[compound_coef], False)
+        self.backbone_net = EffNet(self.backbone_compound_coef[compound_coef], load_weights)
 
     def freeze_bn(self):
         for m in self.modules():
