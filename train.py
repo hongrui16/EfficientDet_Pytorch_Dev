@@ -8,7 +8,7 @@ import os
 import traceback
 from time import gmtime, strftime
 import pytz
-
+import cv2
 import numpy as np
 import torch
 import yaml
@@ -17,12 +17,16 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm.autonotebook import tqdm
+from matplotlib import pyplot as plt
 
 from backbone import EfficientDetBackbone
 from efficientdet.dataset import CocoDataset, Resizer, Normalizer, Augmenter, collater, FakeCocoDataset
 from efficientdet.loss import FocalLoss
 from utils.sync_batchnorm import patch_replication_callback
 from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
+from efficientdet.utils import BBoxTransform, ClipBoxes
+from utils.utils import postprocess, invert_affine, display
+
 
 
 class Params:
@@ -55,7 +59,7 @@ def get_args():
                         help='Early stopping\'s parameter: number of epochs with no improvement after which training will be stopped. Set to 0 to disable this technique.')
     parser.add_argument('--data_path', type=str, default='datasets/', help='the root folder of dataset')
     parser.add_argument('--log_path', type=str, default='logs')
-    parser.add_argument('--resume_path', type=str, default=None)
+    parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--debug', type=boolean_string, default=False,
                         help='whether visualize the predicted boxes of training, '
                              'the output images will be in test/')
@@ -93,7 +97,7 @@ class ModelWithLoss(nn.Module):
             cls_loss, reg_loss = self.criterion(classification, regression, anchors, annotations)
         return cls_loss, reg_loss
 
-
+        
 def get_current_time():
     tz = pytz.timezone('US/Eastern')
     current_time = datetime.datetime.now(tz).strftime("%Y-%m-%d_%H-%M-%S")
@@ -122,9 +126,12 @@ def train(opt):
     opt.log_path = opt.log_path + f'/{params.project_name}/{current_time}'
     tensorboard_dir = opt.log_path + f'/tensorboard'
     weight_save_dir = opt.log_path + f'/weight'
+    temp_cal_dir = opt.log_path + f'/temp'
     os.makedirs(opt.log_path, exist_ok=True)
     os.makedirs(tensorboard_dir, exist_ok=True)
     os.makedirs(weight_save_dir, exist_ok=True)
+    os.makedirs(temp_cal_dir, exist_ok=True)
+    
     print('current_time' + ':' + current_time + '\n')
 
     logfile = os.path.join(opt.log_path, 'parameters.txt')
@@ -158,8 +165,8 @@ def train(opt):
                        'num_workers': opt.num_workers}
 
     val_params = {'batch_size': opt.batch_size,
-                  'shuffle': False,
-                  'drop_last': True,
+                  'shuffle': True,
+                  'drop_last': False,
                   'collate_fn': collater,
                   'num_workers': opt.num_workers}
 
@@ -189,15 +196,17 @@ def train(opt):
     else:
         val_set = None
         val_generator = None
-    # pre_weight_filepath = os.path.join(f'weights/efficientdet-d{opt.compound_coef}.pth')
-    # if not os.path.exists(pre_weight_filepath):
-    #     load_weights = True
-    #     print('[Info] load pretrained weights...')
-    # else:
-    #     load_weights = False
+
 
     model = EfficientDetBackbone(num_classes=len(params.obj_list), compound_coef=opt.compound_coef,
                                  ratios=eval(params.anchors_ratios), scales=eval(params.anchors_scales), load_weights=False)
+    
+    if params.num_gpus > 0:
+        model = model.cuda()
+        if params.num_gpus > 1:
+            model = CustomDataParallel(model, params.num_gpus)
+            if use_sync_bn:
+                patch_replication_callback(model)
 
     if opt.optim == 'adamw':
         optimizer = torch.optim.AdamW(model.parameters(), opt.lr)
@@ -208,20 +217,27 @@ def train(opt):
 
     writer = SummaryWriter(tensorboard_dir)
 
+    
+    
     # warp the model with loss function, to reduce the memory usage on gpu0 and speedup
-    model = ModelWithLoss(model, debug=opt.debug)
+    # model = ModelWithLoss(model, debug=opt.debug)
+    criterion = FocalLoss()
 
     # if cuda:
     #     model.cuda()
     # load last weights
-    if opt.resume_path is not None and os.path.exists(opt.resume_path):
-        checkpoint = torch.load(opt.resume_path, map_location=torch.device('cpu'))
+    if opt.resume is not None and os.path.exists(opt.resume):
+        checkpoint = torch.load(opt.resume, map_location=torch.device('cpu'))
         last_epoch = checkpoint['epoch']
 
-        model.load_state_dict(checkpoint['state_dict'])
+        if isinstance(model, CustomDataParallel):
+            model.module.load_state_dict(checkpoint['state_dict'])
+        else:
+            model.load_state_dict(checkpoint['state_dict'])
+
 
         print("=> loaded checkpoint '{}' (epoch {})"
-                .format(opt.resume_path, checkpoint['epoch']))
+                .format(opt.resume, checkpoint['epoch']))
 
         # Clear start epoch if fine-tuning
         if opt.finetune:
@@ -231,7 +247,7 @@ def train(opt):
             print('fine-tune.................')
         else:
             last_epoch = float(checkpoint['epoch'])
-            best_pred = float(checkpoint['best_pre'])
+            best_pred = float(checkpoint['best_pred'])
             best_loss = float(checkpoint['best_loss'])
             optimizer.load_state_dict(checkpoint['optimizer'])
     else:
@@ -268,13 +284,6 @@ def train(opt):
     else:
         use_sync_bn = False
 
-    if params.num_gpus > 0:
-        model = model.cuda()
-        if params.num_gpus > 1:
-            model = CustomDataParallel(model, params.num_gpus)
-            if use_sync_bn:
-                patch_replication_callback(model)
-
     
     model.train()
     num_iter_per_epoch_tr = len(training_generator)
@@ -289,8 +298,8 @@ def train(opt):
             epoch_loss = []
             epoch_loss_regression= []
             epoch_loss_classification = []
-            progress_bar = tqdm(training_generator)
-            for iter, data in enumerate(progress_bar):
+            tr_progress_bar = tqdm(training_generator)
+            for iter, data in enumerate(tr_progress_bar):
                 # if iter < step - last_epoch * num_iter_per_epoch_tr:
                 #     progress_bar.update()
                 #     continue
@@ -300,7 +309,11 @@ def train(opt):
                 try:
                     imgs = data['img']
                     annot = data['annot']
-
+                    # print('imgs size', imgs.size(), 'annot size', annot.size(), 'annot', annot[0])
+                    # imgs size torch.Size([8, 3, 768, 768]) annot size torch.Size([8, 2, 5]) 
+                    # annot tensor([[331.2207, 393.9860, 597.3701, 599.9611,   0.0000], [106.6851, 185.5393, 183.5513, 351.8619,   0.0000]])
+                    # imgs size torch.Size([8, 3, 768, 768]) annot size torch.Size([8, 2, 5]) 
+                    # annot tensor([[-1., -1., -1., -1., -1.],[-1., -1., -1., -1., -1.]])
                     if params.num_gpus == 1:
                         # if only one gpu, just send it to cuda:0
                         # elif multiple gpus, send it to multiple gpus in CustomDataParallel, not here
@@ -308,7 +321,9 @@ def train(opt):
                         annot = annot.cuda()
 
                     optimizer.zero_grad()
-                    cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
+                    _, regression, classification, anchors = model(imgs)
+                    cls_loss, reg_loss = criterion(classification, regression, anchors, annot)
+                    # cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
                     
                     cls_loss = cls_loss.mean()
                     reg_loss = reg_loss.mean()
@@ -323,8 +338,8 @@ def train(opt):
 
                     epoch_loss.append(float(loss))
                     # print('Train/Loss.....................', loss, step)
-                    progress_bar.set_description(
-                        'Train Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Total loss: {:.5f}'.format(
+                    tr_progress_bar.set_description(
+                        'Train Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.3f}. Reg loss: {:.3f}. Total loss: {:.3f}'.format(
                             epoch, opt.num_epochs, iter + 1, num_iter_per_epoch_tr, cls_loss.item(),
                             reg_loss.item(), loss.item()))
                     writer.add_scalar('Train/Loss', loss.item(), step)
@@ -355,11 +370,12 @@ def train(opt):
             writer.add_scalar('Train/Epoch_loss_reg', ep_reg_loss, epoch)
             writer.add_scalar('Train/Epoch_loss_cls', ep_cls_loss, epoch)
 
+            figure = plot_img_pre_gt(imgs, regression, classification, anchors, params.obj_list, annots = annot)
+            writer.add_figure(f"Train/{epoch}/{iter}",figure)
             scheduler.step(np.mean(epoch_loss))
 
-            save_checkpoints({
+            save_checkpoints(model, {
                 'epoch': epoch,
-                'state_dict': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'best_pred': best_pred,
                 'best_loss': best_loss,
@@ -384,8 +400,10 @@ def train(opt):
                             if params.num_gpus == 1:
                                 imgs = imgs.cuda()
                                 annot = annot.cuda()
-
-                            cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
+                                
+                            _, regression, classification, anchors = model(imgs)
+                            cls_loss, reg_loss = criterion(classification, regression, anchors, annot)
+                            # cls_loss, reg_loss = model(imgs, annot, obj_list=params.obj_list)
                             loss = cls_loss + reg_loss
                             cls_loss = cls_loss.mean()
                             reg_loss = reg_loss.mean()
@@ -394,8 +412,8 @@ def train(opt):
                             if loss == 0 or not torch.isfinite(loss):
                                 continue
                             
-                            progress_bar.set_description(
-                                'Val Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.5f}. Reg loss: {:.5f}. Total loss: {:.5f}'.format(
+                            val_progress_bar.set_description(
+                                'Val Epoch: {}/{}. Iteration: {}/{}. Cls loss: {:.3f}. Reg loss: {:.3f}. Total loss: {:.3f}'.format(
                                     epoch, opt.num_epochs, iter + 1, num_iter_per_epoch_tr, cls_loss.item(),
                                     reg_loss.item(), loss.item()))
                             writer.add_scalar('Val/Loss', loss.item(), step)
@@ -404,6 +422,8 @@ def train(opt):
                             
                             loss_classification_ls.append(cls_loss.item())
                             loss_regression_ls.append(reg_loss.item())
+                    figure = plot_img_pre_gt(imgs, regression, classification, anchors, params.obj_list, annots = annot)
+                    writer.add_figure(f"Val/{epoch}/{iter}",figure)
 
                     ep_cls_loss = np.mean(loss_classification_ls)
                     ep_reg_loss = np.mean(loss_regression_ls)
@@ -418,9 +438,8 @@ def train(opt):
                         best_epoch = epoch
 
                         # save_checkpoint(model, f'efficientdet-d{opt.compound_coef}_{epoch}_{step}.pth', weight_save_dir)
-                        save_checkpoints({
+                        save_checkpoints(model, {
                         'epoch': epoch,
-                        'state_dict': model.state_dict(),
                         'optimizer': optimizer.state_dict(),
                         'best_pred': best_pred,
                         'best_loss': best_loss,
@@ -440,16 +459,46 @@ def train(opt):
 
 def save_checkpoint(model, name, saved_path):
     if isinstance(model, CustomDataParallel):
-        torch.save(model.module.model.state_dict(), os.path.join(saved_path, name))
+        torch.save(model.module.state_dict(), os.path.join(saved_path, name))
     else:
-        torch.save(model.model.state_dict(), os.path.join(saved_path, name))
+        torch.save(model.state_dict(), os.path.join(saved_path, name))
 
-def save_checkpoints(state, filename='checkpoint.pth.tar', saved_path = None):
+def save_checkpoints(model, state, filename='checkpoint.pth.tar', saved_path = None):
+    if isinstance(model, CustomDataParallel):
+        state['state_dict'] = model.module.state_dict()
+        torch.save(state, os.path.join(saved_path, filename))
+    else:
+        state['state_dict'] = model.state_dict()
+        torch.save(state, os.path.join(saved_path, filename))
+
     filename = os.path.join(saved_path, filename)
     torch.save(state, filename)
     # if is_best:   
     #     best_model_filepath = os.path.join(saved_path, 'model_best.pth.tar')
     #     torch.save(state, best_model_filepath)
+
+# debug
+def plot_img_pre_gt(imgs, regressions, classifications, anchors, obj_list, annots = None, training = True, save_dir = None):
+    regressBoxes = BBoxTransform()
+    clipBoxes = ClipBoxes()
+    out = postprocess(imgs.detach(),
+                        torch.stack([anchors[0]] * imgs.shape[0], 0).detach(), regressions.detach(), classifications.detach(),
+                        regressBoxes, clipBoxes,
+                        0.5, 0.3)
+    imgs = imgs.permute(0, 2, 3, 1).cpu().numpy()
+    imgs = ((imgs * [0.229, 0.224, 0.225] + [0.485, 0.456, 0.406]) * 255).astype(np.uint8)
+    # imgs = [cv2.cvtColor(img, cv2.COLOR_RGB2BGR) for img in imgs]
+    imgs_with_bboxes = display(out, imgs, obj_list, imshow=False, training=training, annots = annots, save_dir = save_dir)
+    num = len(imgs_with_bboxes)
+    if not imgs_with_bboxes is None:
+        figure = plt.figure(figsize=(6*num, 6))
+        for i in range(num):
+            plt.subplot(1, num, i+1)
+            plt.imshow(imgs_with_bboxes[i])
+        return figure
+    else:
+        return None
+
 
 if __name__ == '__main__':
     opt = get_args()

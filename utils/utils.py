@@ -128,7 +128,11 @@ def postprocess(x, anchors, regression, classification, regressBoxes, clipBoxes,
     return out
 
 
-def display(preds, imgs, obj_list, imshow=True, imwrite=False):
+def display(preds, imgs, obj_list, imshow=True, training=True, annots = None, save_dir = None):
+    # if not save_dir is None:
+    #     os.makedirs(save_dir, exist_ok=True)
+    if not annots is None:
+        annots = annots.detach().cpu().numpy()
     for i in range(len(imgs)):
         if len(preds[i]['rois']) == 0:
             continue
@@ -142,14 +146,24 @@ def display(preds, imgs, obj_list, imshow=True, imwrite=False):
 
             plot_one_box(imgs[i], [x1, y1, x2, y2], label=obj, score=score,
                          color=color_list[get_index_label(obj, obj_list)])
+
+        for m in range(len(annots[i])):            
+            (x1, y1, x2, y2) = annots[i][m][:4].tolist()
+            plot_one_box(imgs[i], [x1, y1, x2, y2], label=obj, score=score,
+                         color=color_list[get_index_label(obj, obj_list)+1])
         if imshow:
             cv2.imshow('img', imgs[i])
             cv2.waitKey(0)
 
-        if imwrite:
-            os.makedirs('test/', exist_ok=True)
-            cv2.imwrite(f'test/{uuid.uuid4().hex}.jpg', imgs[i])
-
+        if not save_dir is None:
+            os.makedirs(save_dir, exist_ok=True)
+            cv2.imwrite(os.path.join(save_dir, f'{uuid.uuid4().hex}.jpg', imgs[i]))
+        if training and i > 2:
+            break
+    if training and len(imgs) >= 3:
+        return imgs[:3]
+    else:
+        None
 
 def replace_w_sync_bn(m):
     for var_name in dir(m):
@@ -246,7 +260,7 @@ def variance_scaling_(tensor, gain=1.):
 
 
 STANDARD_COLORS = [
-    'LawnGreen', 'Chartreuse', 'Aqua', 'Beige', 'Azure', 'BlanchedAlmond', 'Bisque',
+    'Red', 'LawnGreen', 'Chartreuse', 'Aqua', 'Beige', 'Azure', 'BlanchedAlmond', 'Bisque',
     'Aquamarine', 'BlueViolet', 'BurlyWood', 'CadetBlue', 'AntiqueWhite',
     'Chocolate', 'Coral', 'CornflowerBlue', 'Cornsilk', 'Crimson', 'Cyan',
     'DarkCyan', 'DarkGoldenRod', 'DarkGrey', 'DarkKhaki', 'DarkOrange',
@@ -264,7 +278,7 @@ STANDARD_COLORS = [
     'NavajoWhite', 'OldLace', 'Olive', 'OliveDrab', 'Orange', 'OrangeRed',
     'Orchid', 'PaleGoldenRod', 'PaleGreen', 'PaleTurquoise', 'PaleVioletRed',
     'PapayaWhip', 'PeachPuff', 'Peru', 'Pink', 'Plum', 'PowderBlue', 'Purple',
-    'Red', 'RosyBrown', 'RoyalBlue', 'SaddleBrown', 'Green', 'SandyBrown',
+    'RosyBrown', 'RoyalBlue', 'SaddleBrown', 'Green', 'SandyBrown',
     'SeaGreen', 'SeaShell', 'Sienna', 'Silver', 'SkyBlue', 'SlateBlue',
     'SlateGray', 'SlateGrey', 'Snow', 'SpringGreen', 'SteelBlue', 'GreenYellow',
     'Teal', 'Thistle', 'Tomato', 'Turquoise', 'Violet', 'Wheat', 'White',
