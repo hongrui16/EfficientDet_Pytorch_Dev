@@ -373,6 +373,7 @@ def train(opt):
             figure = plot_img_pre_gt(imgs, regression, classification, anchors, params.obj_list, annots = annot)
             writer.add_figure(f"Train/{epoch}/{iter}",figure)
             scheduler.step(np.mean(epoch_loss))
+            # del figure
 
             save_checkpoints(model, {
                 'epoch': epoch,
@@ -396,7 +397,7 @@ def train(opt):
                         with torch.no_grad():
                             imgs = data['img']
                             annot = data['annot']
-
+                            # print('imgs size', imgs.size(), 'annot size', annot.size(), 'annot', annot[0])
                             if params.num_gpus == 1:
                                 imgs = imgs.cuda()
                                 annot = annot.cuda()
@@ -424,6 +425,7 @@ def train(opt):
                             loss_regression_ls.append(reg_loss.item())
                     figure = plot_img_pre_gt(imgs, regression, classification, anchors, params.obj_list, annots = annot)
                     writer.add_figure(f"Val/{epoch}/{iter}",figure)
+                    # del figure
 
                     ep_cls_loss = np.mean(loss_classification_ls)
                     ep_reg_loss = np.mean(loss_regression_ls)
@@ -488,7 +490,7 @@ def plot_img_pre_gt(imgs, regressions, classifications, anchors, obj_list, annot
     imgs = imgs.permute(0, 2, 3, 1).cpu().numpy()
     imgs = ((imgs * [0.229, 0.224, 0.225] + [0.485, 0.456, 0.406]) * 255).astype(np.uint8)
     # imgs = [cv2.cvtColor(img, cv2.COLOR_RGB2BGR) for img in imgs]
-    imgs_with_bboxes = display(out, imgs, obj_list, imshow=False, training=training, annots = annots, save_dir = save_dir)
+    imgs_with_bboxes = display(out, imgs, obj_list, imshow=False, training = training, annots = annots, save_dir = save_dir)
     num = len(imgs_with_bboxes)
     if not imgs_with_bboxes is None:
         figure = plt.figure(figsize=(6*num, 6))

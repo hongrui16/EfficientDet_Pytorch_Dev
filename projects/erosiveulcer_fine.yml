@@ -25,11 +25,13 @@ obj_list: ['cancer']
 # anchors torch.Size([1, 110484, 4])
 
 #train
-train_annFile: /data3/zzhang/annotation/erosiveulcer_fine/trainfp1108.json
+# train_annFile: /data3/zzhang/annotation/erosiveulcer_fine/trainfp1108.json
+train_annFile: /data2/hongrui/project/dataset/annotation/erosiveulcer_fine/trainfp1108.json
 train_image_dir: /data2/zzhang/annotation/erosiveulcer_fine/train/images/
 ##[304, 551, 0, 487, 2717]
 
 #val
-val_annFile: /data2/zzhang/annotation/erosiveulcer_fine/trainfp0927.json
+# val_annFile: /data2/zzhang/annotation/erosiveulcer_fine/trainfp0927.json
+val_annFile: /data2/hongrui/project/dataset/annotation/erosiveulcer_fine/trainfp1108.json
 val_image_dir: /data2/zzhang/annotation/erosiveulcer_fine/train/images/
 ##[290, 159, 0, 487, 1762]

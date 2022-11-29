@@ -209,6 +209,8 @@ class FakeCocoDataset(Dataset):
             # some annotations have basically no width / height, skip them
             if a['bbox'][2] < 1 or a['bbox'][3] < 1:
                 continue
+            if self.args.call_cancer_only and a['category_id'] != self.cancer_label_id:
+                continue
             annotation = np.zeros((1, 5))
             
                 # annotation[0, :4] = a['bbox']
@@ -218,8 +220,7 @@ class FakeCocoDataset(Dataset):
             except:
                 # print('error')
                 continue
-            if self.args.call_cancer_only and a['category_id'] != self.cancer_label_id:
-                continue
+            
             annotation[0, 4] = cls_id 
             annotation[0, :4] = a['bbox']
             annotations = np.append(annotations, annotation, axis=0)
@@ -228,10 +229,12 @@ class FakeCocoDataset(Dataset):
         if len(mask[mask==self.cancer_label_id]) > 0 and self.args.use_paste_aug:
             if len(mask.shape) == 2 and len(img.shape) == 3:
                 annotation = np.zeros((1, 5))
-                img, _, bbox = paste_instance_on_the_same_image_syncs(img.copy(), mask.copy(), img.copy(), mask.copy(), self.cancer_label_id)
-                annotation[0, :4] = np.array(bbox)
-                annotation[0, 4] = self.cancer_label_id
-                annotations = np.append(annotations, annotation, axis=0)
+                t_img, _, t_bbox = paste_instance_on_the_same_image_syncs(img.copy(), mask.copy(), img.copy(), mask.copy(), self.cancer_label_id)
+                if (not t_img is None) and (not t_bbox is None):
+                    annotation[0, :4] = np.array(t_bbox)
+                    annotation[0, 4] = self.cancer_label_id
+                    annotations = np.append(annotations, annotation, axis=0)
+                    img = t_img
         if self.args.call_cancer_only:
             annotations[:, 4][annotations[:, 4] != self.cancer_label_id] = 0 
             annotations[:, 4][annotations[:, 4] == self.cancer_label_id] = 0 
@@ -321,6 +324,13 @@ def paste_instance_on_the_same_image_syncs(fg_img, fg_label, bg_img, bg_label, t
     fg_mask = fg_mask.astype(np.uint8)
     fg_bbox = mask_to_bbox_corners(fg_mask)
     xmin, ymin, xmax, ymax = fg_bbox
+    fg_h, fg_w = fg_mask.shape
+    if len(fg_mask[fg_mask == 1]) /(fg_h * fg_w) > 0.4:
+        return None, None, None
+    b_h = ymax - ymin
+    b_w = xmax - xmin
+    if b_w * b_h / (fg_h * fg_w) > 0.4:
+        return None, None, None
     # print('fg_bbox', fg_bbox)
 
     # print('fg_mask', fg_mask.nonzero())

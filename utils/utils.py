@@ -133,37 +133,56 @@ def display(preds, imgs, obj_list, imshow=True, training=True, annots = None, sa
     #     os.makedirs(save_dir, exist_ok=True)
     if not annots is None:
         annots = annots.detach().cpu().numpy()
+        # print(f'display, {annots[0]}')
     for i in range(len(imgs)):
-        if len(preds[i]['rois']) == 0:
-            continue
+        # if len(preds[i]['rois']) == 0:
+        #     continue
 
-        imgs[i] = imgs[i].copy()
+        image = imgs[i].copy()
 
         for j in range(len(preds[i]['rois'])):
             (x1, y1, x2, y2) = preds[i]['rois'][j].astype(np.int)
+            if x2-x1 < 2 or y2-y1 < 2:
+                continue
+            # print('imgs[i].shape', imgs[i].shape)
+            # print('pre', x1, y1, x2, y2)
             obj = obj_list[preds[i]['class_ids'][j]]
             score = float(preds[i]['scores'][j])
 
-            plot_one_box(imgs[i], [x1, y1, x2, y2], label=obj, score=score,
+            image = plot_one_box(image, [x1, y1, x2, y2], label=obj, score=score,
                          color=color_list[get_index_label(obj, obj_list)])
+            # image = plot_one_box(image, [x1, y1, x2, y2], score=score,
+            #              color=color_list[get_index_label(obj, obj_list)])
 
-        for m in range(len(annots[i])):            
+        for m in range(len(annots[i])):
+            cls_id = int(annots[i][m][4])
+            if cls_id < 0:
+                continue
+            obj = obj_list[cls_id]
             (x1, y1, x2, y2) = annots[i][m][:4].tolist()
-            plot_one_box(imgs[i], [x1, y1, x2, y2], label=obj, score=score,
+            
+            # print('imgs[i].shape', imgs[i].shape)
+            # print('gt', x1, y1, x2, y2)
+            image = plot_one_box(image, [x1, y1, x2, y2], label=obj, 
                          color=color_list[get_index_label(obj, obj_list)+1])
+            # image = plot_one_box(image, [x1, y1, x2, y2], score=score,
+            #              color=color_list[get_index_label(obj, obj_list)+1])
+
         if imshow:
-            cv2.imshow('img', imgs[i])
+            cv2.imshow('img', image)
             cv2.waitKey(0)
 
         if not save_dir is None:
             os.makedirs(save_dir, exist_ok=True)
-            cv2.imwrite(os.path.join(save_dir, f'{uuid.uuid4().hex}.jpg', imgs[i]))
+            cv2.imwrite(os.path.join(save_dir, f'{uuid.uuid4().hex}.jpg', image))
+        imgs[i] = image
         if training and i > 2:
             break
     if training and len(imgs) >= 3:
         return imgs[:3]
     else:
-        None
+        return imgs
+
 
 def replace_w_sync_bn(m):
     for var_name in dir(m):
@@ -311,13 +330,19 @@ def plot_one_box(img, coord, label=None, score=None, color=None, line_thickness=
     cv2.rectangle(img, c1, c2, color, thickness=tl)
     if label:
         tf = max(tl - 2, 1)  # font thickness
-        s_size = cv2.getTextSize(str('{:.0%}'.format(score)), 0, fontScale=float(tl) / 3, thickness=tf)[0]
         t_size = cv2.getTextSize(label, 0, fontScale=float(tl) / 3, thickness=tf)[0]
-        c2 = c1[0] + t_size[0] + s_size[0] + 15, c1[1] - t_size[1] - 3
-        cv2.rectangle(img, c1, c2, color, -1)  # filled
-        cv2.putText(img, '{}: {:.0%}'.format(label, score), (c1[0], c1[1] - 2), 0, float(tl) / 3, [0, 0, 0],
-                    thickness=tf, lineType=cv2.FONT_HERSHEY_SIMPLEX)
-
+        if score:
+            s_size = cv2.getTextSize(str('{:.0%}'.format(score)), 0, fontScale=float(tl) / 3, thickness=tf)[0]
+            c2 = c1[0] + t_size[0] + s_size[0] + 15, c1[1] - t_size[1] - 3
+            cv2.rectangle(img, c1, c2, color, -1)  # filled
+            cv2.putText(img, '{}: {:.0%}'.format(label, score), (c1[0], c1[1] - 2), 0, float(tl) / 3, [0, 0, 0],
+                        thickness=tf, lineType=cv2.FONT_HERSHEY_SIMPLEX)
+        else:
+            c2 = c1[0] + t_size[0] + 15, c1[1] - t_size[1] - 3
+            cv2.rectangle(img, c1, c2, color, -1)  # filled
+            cv2.putText(img, '{} GT'.format(label), (c1[0], c1[1] - 2), 0, float(tl) / 3, [0, 0, 0],
+                        thickness=tf, lineType=cv2.FONT_HERSHEY_SIMPLEX)
+    return img
 
 color_list = standard_to_bgr(STANDARD_COLORS)
 
