@@ -74,7 +74,7 @@ def get_args():
     parser.add_argument('--gpu_id', type=str, default=None)
     parser.add_argument('-ft', '--finetune', type=boolean_string, default=False,
                         help='fine-tune')
-    parser.add_argument('--pre_weight', type=str, default=None)
+
     args = parser.parse_args()
     return args
 
@@ -222,45 +222,41 @@ def train(opt):
     # model = ModelWithLoss(model, debug=opt.debug)
     criterion = FocalLoss()
 
-    if opt.pre_weight:
-        if opt.pre_weight.endswith('.pth'):
-            print(f'load pre-trained weight from {opt.pre_weight}')
-            pretrained_state = torch.load(opt.pre_weight)
+    last_epoch = -1
+    best_pred = 0.0
+    best_loss = float('inf')
+
+    if opt.resume is not None and os.path.exists(opt.resume):
+        print(f'=> loaded checkpoint {opt.resume}')
+        if opt.resume.endswith('.pth.tar'):
+            checkpoint = torch.load(opt.resume, map_location=torch.device('cpu'))
+            last_epoch = checkpoint['epoch']
+
+            if isinstance(model, CustomDataParallel):
+                model.module.load_state_dict(checkpoint['state_dict'], strict=False)
+            else:
+                model.load_state_dict(checkpoint['state_dict'], strict=False)
+            # Clear start epoch if fine-tuning
+            if opt.finetune:
+                last_epoch = -1
+                best_pred = 0.0
+                best_loss = float('inf')
+                print('fine-tune.................')
+            else:
+                last_epoch = float(checkpoint['epoch'])
+                best_pred = float(checkpoint['best_pred'])
+                best_loss = float(checkpoint['best_loss'])
+                optimizer.load_state_dict(checkpoint['optimizer'])
+        elif opt.resume.endswith('.pth'):
+            print(f'load pre-trained weight from {opt.resume}')
+            pretrained_state = torch.load(opt.resume)
             model_state = model.state_dict()
             pretrained_state = {k: v for k, v in pretrained_state.items() if (k in model_state) and (model_state[k].shape == pretrained_state[k].shape)}
             model_state.update(pretrained_state)
             model.load_state_dict(model_state,strict=False)
-
-    # if cuda:
-    #     model.cuda()
-    # load last weights
-    if opt.resume is not None and os.path.exists(opt.resume):
-        print("=> loaded checkpoint '{}' (epoch {})"
-                .format(opt.resume, checkpoint['epoch']))
-        checkpoint = torch.load(opt.resume, map_location=torch.device('cpu'))
-        last_epoch = checkpoint['epoch']
-
-        if isinstance(model, CustomDataParallel):
-            model.module.load_state_dict(checkpoint['state_dict'], strict=False)
-        else:
-            model.load_state_dict(checkpoint['state_dict'], strict=False)
-        # Clear start epoch if fine-tuning
-        if opt.finetune:
-            last_epoch = -1
-            best_pred = 0.0
-            best_loss = float('inf')
-            print('fine-tune.................')
-        else:
-            last_epoch = float(checkpoint['epoch'])
-            best_pred = float(checkpoint['best_pred'])
-            best_loss = float(checkpoint['best_loss'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-    else:
-        last_epoch = -1
-        best_pred = 0.0
-        best_loss = float('inf')
         
-    
+        else:
+            pass
 
     # freeze backbone if train head_only
     if opt.head_only:
