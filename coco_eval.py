@@ -23,14 +23,15 @@ from pycocotools.cocoeval import COCOeval
 from backbone import EfficientDetBackbone
 from efficientdet.utils import BBoxTransform, ClipBoxes
 from utils.utils import preprocess, invert_affine, postprocess, boolean_string
+from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
 
 ap = argparse.ArgumentParser()
-ap.add_argument('-p', '--project', type=str, default='coco', help='project file that contains parameters')
-ap.add_argument('-c', '--compound_coef', type=int, default=0, help='coefficients of efficientdet')
+ap.add_argument('-p', '--project', type=str, default='erosiveulcer_fine', help='project file that contains parameters')
+ap.add_argument('-c', '--compound_coef', type=int, default=2, help='coefficients of efficientdet')
 ap.add_argument('-w', '--weights', type=str, default=None, help='/path/to/weights')
 ap.add_argument('--nms_threshold', type=float, default=0.5, help='nms threshold, don\'t change it if not for testing purposes')
 ap.add_argument('--cuda', type=boolean_string, default=True)
-ap.add_argument('--device', type=int, default=0)
+ap.add_argument('--device', type=int, default=2)
 ap.add_argument('--float16', type=boolean_string, default=False)
 ap.add_argument('--override', type=boolean_string, default=True, help='override previous bbox results file if exists')
 args = ap.parse_args()
@@ -42,8 +43,11 @@ gpu = args.device
 use_float16 = args.float16
 override_prev_results = args.override
 project_name = args.project
-weights_path = f'weights/efficientdet-d{compound_coef}.pth' if args.weights is None else args.weights
-
+# weights_path = f'weights/efficientdet-d{compound_coef}.pth' if args.weights is None else args.weights
+weights_path = '/data2/hongrui/project/Yet-Another-EfficientDet-Pytorch/logs/erosiveulcer_fine/\
+2022-11-29_11-04-17/weight/efficientdet-d2_best.pth.tar'
+# weights_path = '/data2/hongrui/project/Yet-Another-EfficientDet-Pytorch/logs/erosiveulcer_fine/\
+# 2022-11-29_11-19-30/weight/efficientdet-d2_best.pth.tar'
 print(f'running coco-style evaluation on project {project_name}, weights {weights_path}...')
 
 params = yaml.safe_load(open(f'projects/{project_name}.yml'))
@@ -51,6 +55,7 @@ obj_list = params['obj_list']
 
 input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536, 1536]
 
+output_dir = weights_path[:weights_path.find('weight')]
 
 def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
     results = []
@@ -105,7 +110,8 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
 
                 image_result = {
                     'image_id': image_id,
-                    'category_id': label + 1,
+                    # 'category_id': label + 1,
+                    'category_id': label + 5,
                     'score': float(score),
                     'bbox': box.tolist(),
                 }
@@ -116,7 +122,7 @@ def evaluate_coco(img_path, set_name, image_ids, coco, model, threshold=0.05):
         raise Exception('the model does not provide any valid output, check model architecture and the data input')
 
     # write output
-    filepath = f'{set_name}_bbox_results.json'
+    filepath = os.path.join(output_dir, f'{set_name}_bbox_results.json') 
     if os.path.exists(filepath):
         os.remove(filepath)
     json.dump(results, open(filepath, 'w'), indent=4)
@@ -137,16 +143,27 @@ def _eval(coco_gt, image_ids, pred_json_path):
 
 if __name__ == '__main__':
     SET_NAME = params['val_set']
-    VAL_GT = f'datasets/{params["project_name"]}/annotations/instances_{SET_NAME}.json'
-    VAL_IMGS = f'datasets/{params["project_name"]}/{SET_NAME}/'
-    MAX_IMAGES = 10000
+    # VAL_GT = f'datasets/{params["project_name"]}/annotations/instances_{SET_NAME}.json'
+    # VAL_IMGS = f'datasets/{params["project_name"]}/{SET_NAME}/'
+    VAL_GT = '/data2/hongrui/project/dataset/annotation/erosiveulcer_fine/trainfp1108.json'
+    VAL_IMGS = '/data2/zzhang/annotation/erosiveulcer_fine/train/images/'
+    MAX_IMAGES = 1000
     coco_gt = COCO(VAL_GT)
+    # image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
+    # image_ids = coco_gt.getImgIds()
     image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
-    
-    if override_prev_results or not os.path.exists(f'{SET_NAME}_bbox_results.json'):
+    result_json = os.path.join(output_dir, f'{SET_NAME}_bbox_results.json')
+    if os.path.exists(result_json):
+        os.remove(result_json)
+    if override_prev_results:
         model = EfficientDetBackbone(compound_coef=compound_coef, num_classes=len(obj_list),
                                      ratios=eval(params['anchors_ratios']), scales=eval(params['anchors_scales']))
-        model.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
+        # model.module.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
+        checkpoint = torch.load(weights_path, map_location=torch.device('cpu'))
+        if isinstance(model, CustomDataParallel):
+            model.module.load_state_dict(checkpoint['state_dict'])
+        else:
+            model.load_state_dict(checkpoint['state_dict'])
         model.requires_grad_(False)
         model.eval()
 
@@ -157,5 +174,6 @@ if __name__ == '__main__':
                 model.half()
 
         evaluate_coco(VAL_IMGS, SET_NAME, image_ids, coco_gt, model)
-
-    _eval(coco_gt, image_ids, f'{SET_NAME}_bbox_results.json')
+    
+    _eval(coco_gt, image_ids, result_json)
+    

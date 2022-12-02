@@ -1,6 +1,6 @@
 project_name: erosiveulcer_fine  # also the folder name of the dataset that under data_path folder
-train_set: train
-val_set: val
+train_set: erosiveulcer_fine_train
+val_set: erosiveulcer_fine_val
 # num_gpus: 1
 
 # mean and std in RGB order, actually this part should remain unchanged as long as your dataset is similar to coco.
@@ -26,12 +26,12 @@ obj_list: ['cancer']
 
 #train
 # train_annFile: /data3/zzhang/annotation/erosiveulcer_fine/trainfp1108.json
-train_annFile: /data2/hongrui/project/dataset/annotation/erosiveulcer_fine/trainfp1108.json
+train_annFile: /data2/hongrui/project/dataset/annotation/erosiveulcer_fine/cancer/train.json
 train_image_dir: /data2/zzhang/annotation/erosiveulcer_fine/train/images/
 ##[304, 551, 0, 487, 2717]
 
 #val
 # val_annFile: /data2/zzhang/annotation/erosiveulcer_fine/trainfp0927.json
-val_annFile: /data2/hongrui/project/dataset/annotation/erosiveulcer_fine/trainfp1108.json
+val_annFile: /data2/hongrui/project/dataset/annotation/erosiveulcer_fine/cancer/val.json
 val_image_dir: /data2/zzhang/annotation/erosiveulcer_fine/train/images/
 ##[290, 159, 0, 487, 1762]
