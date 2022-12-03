@@ -55,7 +55,7 @@ def get_args():
     parser.add_argument('--save_interval', type=int, default=500, help='Number of steps between saving')
     parser.add_argument('--es_min_delta', type=float, default=0.0,
                         help='Early stopping\'s parameter: minimum change loss to qualify as an improvement')
-    parser.add_argument('--es_patience', type=int, default=0,
+    parser.add_argument('--es_patience', type=int, default=15,
                         help='Early stopping\'s parameter: number of epochs with no improvement after which training will be stopped. Set to 0 to disable this technique.')
     parser.add_argument('--data_path', type=str, default='datasets/', help='the root folder of dataset')
     parser.add_argument('--log_path', type=str, default='logs')
@@ -289,6 +289,7 @@ def train(opt):
     else:
         use_sync_bn = False
 
+    best_epoch = 999
     
     model.train()
     num_iter_per_epoch_tr = len(training_generator)
