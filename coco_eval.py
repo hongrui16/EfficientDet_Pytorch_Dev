@@ -45,7 +45,7 @@ override_prev_results = args.override
 project_name = args.project
 # weights_path = f'weights/efficientdet-d{compound_coef}.pth' if args.weights is None else args.weights
 weights_path = '/data2/hongrui/project/Yet-Another-EfficientDet-Pytorch/logs/erosiveulcer_fine/\
-2022-11-29_11-04-17/weight/efficientdet-d2_best.pth.tar'
+2022-12-02_11-56-55/weight/efficientdet-d2_best.pth.tar'
 # weights_path = '/data2/hongrui/project/Yet-Another-EfficientDet-Pytorch/logs/erosiveulcer_fine/\
 # 2022-11-29_11-19-30/weight/efficientdet-d2_best.pth.tar'
 print(f'running coco-style evaluation on project {project_name}, weights {weights_path}...')
@@ -139,15 +139,15 @@ def _eval(coco_gt, image_ids, pred_json_path):
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
-
+    mean_ap = coco_eval.stats[0].item()  # stats[0] records AP@[0.5:0.95]
 
 if __name__ == '__main__':
     SET_NAME = params['val_set']
     # VAL_GT = f'datasets/{params["project_name"]}/annotations/instances_{SET_NAME}.json'
     # VAL_IMGS = f'datasets/{params["project_name"]}/{SET_NAME}/'
-    VAL_GT = '/data2/hongrui/project/dataset/annotation/erosiveulcer_fine/trainfp1108.json'
+    VAL_GT = '/data2/hongrui/project/dataset/annotation/erosiveulcer_fine/cancer/test.json'
     VAL_IMGS = '/data2/zzhang/annotation/erosiveulcer_fine/train/images/'
-    MAX_IMAGES = 1000
+    MAX_IMAGES = 40
     coco_gt = COCO(VAL_GT)
     # image_ids = coco_gt.getImgIds()[:MAX_IMAGES]
     # image_ids = coco_gt.getImgIds()

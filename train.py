@@ -125,11 +125,11 @@ def train(opt):
     opt.log_path = opt.log_path + f'/{params.project_name}/{current_time}'
     tensorboard_dir = opt.log_path + f'/tensorboard'
     weight_save_dir = opt.log_path + f'/weight'
-    temp_cal_dir = opt.log_path + f'/temp'
+    # temp_cal_dir = opt.log_path + f'/temp'
     os.makedirs(opt.log_path, exist_ok=True)
     os.makedirs(tensorboard_dir, exist_ok=True)
     os.makedirs(weight_save_dir, exist_ok=True)
-    os.makedirs(temp_cal_dir, exist_ok=True)
+    # os.makedirs(temp_cal_dir, exist_ok=True)
     
     print('current_time' + ':' + current_time + '\n')
 
@@ -145,8 +145,14 @@ def train(opt):
     log_file.write('\n')
     # current_time = strftime("%Y-%m-%d-%H-%M-%S", gmtime())
 
-    p=vars(params)
-    for key, val in p.items():
+    p_vars=vars(params)
+    p_vars = p_vars['params']
+    # print(type(p_vars), p_vars)
+    keys = p_vars.keys()
+    # for key, val in params.items():
+    #     log_file.write(key + ':' + str(val) + '\n')
+    for key in keys:
+        val = p_vars[key]
         log_file.write(key + ':' + str(val) + '\n')
     log_file.write('\n')
 
@@ -293,7 +299,7 @@ def train(opt):
             # last_epoch = step // num_iter_per_epoch
             if epoch <= last_epoch:
                 continue
-
+            print(f'...saving to {opt.log_path}')
             epoch_loss = []
             epoch_loss_regression= []
             epoch_loss_classification = []

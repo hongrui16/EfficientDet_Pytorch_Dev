@@ -330,17 +330,17 @@ def plot_one_box(img, coord, label=None, score=None, color=None, line_thickness=
     cv2.rectangle(img, c1, c2, color, thickness=tl)
     if label:
         tf = max(tl - 2, 1)  # font thickness
-        t_size = cv2.getTextSize(label, 0, fontScale=float(tl) / 3, thickness=tf)[0]
+        t_size = cv2.getTextSize(label, 0, fontScale=float(tl) / 2, thickness=tf)[0]
         if score:
-            s_size = cv2.getTextSize(str('{:.0%}'.format(score)), 0, fontScale=float(tl) / 3, thickness=tf)[0]
+            s_size = cv2.getTextSize(str('{:.0%}'.format(score)), 0, fontScale=float(tl) / 2, thickness=tf)[0]
             c2 = c1[0] + t_size[0] + s_size[0] + 15, c1[1] - t_size[1] - 3
             cv2.rectangle(img, c1, c2, color, -1)  # filled
-            cv2.putText(img, '{}: {:.0%}'.format(label, score), (c1[0], c1[1] - 2), 0, float(tl) / 3, [0, 0, 0],
+            cv2.putText(img, '{}: {:.0%}'.format(label, score), (c1[0], c1[1] - 2), 0, float(tl) / 2, [0, 0, 0],
                         thickness=tf, lineType=cv2.FONT_HERSHEY_SIMPLEX)
         else:
             c2 = c1[0] + t_size[0] + 15, c1[1] - t_size[1] - 3
             cv2.rectangle(img, c1, c2, color, -1)  # filled
-            cv2.putText(img, '{} GT'.format(label), (c1[0], c1[1] - 2), 0, float(tl) / 3, [0, 0, 0],
+            cv2.putText(img, '{} GT'.format(label), (c1[0], c1[1] - 2), 0, float(tl) / 2, [0, 0, 0],
                         thickness=tf, lineType=cv2.FONT_HERSHEY_SIMPLEX)
     return img
 
