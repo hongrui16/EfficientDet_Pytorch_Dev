@@ -227,8 +227,8 @@ if __name__ == '__main__':
     model = EfficientDetBackbone(compound_coef=compound_coef, num_classes=len(obj_list),
                                     ratios=eval(params['anchors_ratios']), scales=eval(params['anchors_scales']))
     # model.module.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
-    weights_paths = ['logs/erosiveulcer_fine/2022-12-02_11-56-55/weight/efficientdet-d2_best.pth.tar',
-                     'logs/erosiveulcer_fine/2022-12-02_13-01-32/weight/efficientdet-d2_best.pth.tar']
+    weights_paths = [#'logs/erosiveulcer_fine/2022-12-02_23-07-20/weight/efficientdet-d2_best.pth.tar',
+                     'logs/erosiveulcer_fine/2022-12-02_23-07-42/weight/efficientdet-d2.pth.tar']
     for weights_path in weights_paths:
         print(f'loading weight from {weights_path}')
         log_dict['weight'] = weights_path
