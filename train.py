@@ -25,7 +25,7 @@ from efficientdet.loss import FocalLoss
 from utils.sync_batchnorm import patch_replication_callback
 from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
 from efficientdet.utils import BBoxTransform, ClipBoxes
-from utils.utils import postprocess, invert_affine, display
+from utils.utils import postprocess, invert_affine, display, get_current_time
 
 
 
@@ -98,11 +98,7 @@ class ModelWithLoss(nn.Module):
             cls_loss, reg_loss = self.criterion(classification, regression, anchors, annotations)
         return cls_loss, reg_loss
 
-        
-def get_current_time():
-    tz = pytz.timezone('US/Eastern')
-    current_time = datetime.datetime.now(tz).strftime("%Y-%m-%d_%H-%M-%S")
-    return str(current_time)
+
 
 def train(opt):
     params = Params(f'projects/{opt.project}.yml')
@@ -137,11 +133,12 @@ def train(opt):
 
     p=vars(opt)
     log_file = open(logfile, "a+")
+    log_file.write('----------------------Training-------------------------' + '\n')
     log_file.write('current_time' + ':' + current_time + '\n')
-    log_file.write('\n')
+    # log_file.write('\n')
     for key, val in p.items():
         log_file.write(key + ':' + str(val) + '\n')
-    log_file.write('\n')
+    # log_file.write('\n')
     log_file.write('\n')
     # current_time = strftime("%Y-%m-%d-%H-%M-%S", gmtime())
 

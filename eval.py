@@ -24,6 +24,7 @@ from backbone import EfficientDetBackbone
 from efficientdet.utils import BBoxTransform, ClipBoxes
 from utils.utils import preprocess, invert_affine, postprocess, boolean_string
 from utils.utils import replace_w_sync_bn, CustomDataParallel, get_last_weights, init_weights, boolean_string
+from utils.utils import get_current_time
 
 ap = argparse.ArgumentParser()
 ap.add_argument('-p', '--project', type=str, default='erosiveulcer_fine', help='project file that contains parameters')
@@ -228,7 +229,11 @@ if __name__ == '__main__':
                                     ratios=eval(params['anchors_ratios']), scales=eval(params['anchors_scales']))
     # model.module.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
     weights_paths = [#'logs/erosiveulcer_fine/2022-12-02_23-07-20/weight/efficientdet-d2_best.pth.tar',
-                     'logs/erosiveulcer_fine/2022-12-02_23-07-42/weight/efficientdet-d2.pth.tar']
+                    #  'logs/erosiveulcer_fine/2022-12-02_23-07-42/weight/efficientdet-d2.pth.tar',
+                     'logs/erosiveulcer_fine/2022-11-29_11-04-17/weight/efficientdet-d2_best.pth.tar',
+                     'logs/erosiveulcer_fine/2022-11-29_11-19-30/weight/efficientdet-d2_best.pth.tar',
+                     ]
+                     
     for weights_path in weights_paths:
         print(f'loading weight from {weights_path}')
         log_dict['weight'] = weights_path
@@ -241,12 +246,16 @@ if __name__ == '__main__':
         mean_ap = calculate_metric(model, GT_, IMGS_)
 
         log_dict['AP@[0.5:0.95]'] = mean_ap
-
-        result_filepath = os.path.join(output_dir, f'result.txt') 
-        if os.path.exists(result_filepath):
-            os.remove(result_filepath)
+        current_time = get_current_time()
+        result_filepath = os.path.join(output_dir, f'parameters.txt') 
+        # if os.path.exists(result_filepath):
+        #     os.remove(result_filepath)
         log_file = open(result_filepath, "a+")
-        
+        log_file.write('\n')
+        log_file.write('\n')
+        log_file.write('----------------------Eval-------------------------' + '\n')
+        log_file.write(current_time + '\n')
+
         p = vars(args)
         for key, val in p.items():
             log_file.write(key + ':' + str(val) + '\n')
@@ -254,5 +263,8 @@ if __name__ == '__main__':
 
         for key, val in log_dict.items():
             log_file.write(key + ':' + str(val) + '\n')
+        log_file.write('----------------------Eval END-------------------------' + '\n')
+
         log_file.write('\n')
         log_file.close()
+        print('\n')

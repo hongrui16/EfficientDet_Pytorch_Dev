@@ -5,6 +5,10 @@ import os
 import uuid
 from glob import glob
 from typing import Union
+import datetime
+import traceback
+from time import gmtime, strftime
+import pytz
 
 import cv2
 import numpy as np
@@ -351,3 +355,9 @@ def boolean_string(s):
     if s not in {'False', 'True'}:
         raise ValueError('Not a valid boolean string')
     return s == 'True'
+
+        
+def get_current_time():
+    tz = pytz.timezone('US/Eastern')
+    current_time = datetime.datetime.now(tz).strftime("%Y-%m-%d_%H-%M-%S")
+    return str(current_time)
